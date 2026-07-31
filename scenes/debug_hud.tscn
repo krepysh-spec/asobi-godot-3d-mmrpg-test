@@ -14,6 +14,7 @@ corner_radius_bottom_right = 5
 script = ExtResource("1_hud")
 
 [node name="Panel" type="PanelContainer" parent="."]
+mouse_filter = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_bg")
 
 [node name="Label" type="Label" parent="Panel"]

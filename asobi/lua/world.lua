@@ -12,7 +12,8 @@
 --
 --   * every player standing in a zone sees the same props in the same places,
 --     and a zone that is unloaded and re-entered looks identical. That is why
---     the layout is a pure function of (cx, cy) and no layout state is kept.
+--     the layout is a pure function of (cx, cy): the positions are recomputed,
+--     never stored. Only the fact that a zone has been seeded is remembered.
 --   * nothing is kept alive for zones nobody is near.
 
 game_type         = "world"
@@ -48,24 +49,30 @@ local ZONES_PER_TICK = 2             -- zones seeded per sweep, to avoid bursts
 -- zone processes until the node runs out of memory.
 local PROP_RADIUS = 0
 
--- Declared per the asobi_world.spawn_templates/1 contract. Note that the props
--- below are written into the entity map directly rather than through
--- game.zone.spawn: on this build that call returns true and materialises
--- nothing. Keeping the templates here means switching back is a small edit to
--- populate_zone once that is fixed.
+-- The registry populate_zone spawns from. Reaching the zone's spawner at all
+-- needs asobi > 0.46: before the fix for widgrensit/asobi#246 the templates
+-- were looked up in the world config instead of its game state, so the spawner
+-- started empty and every game.zone.spawn returned true and created nothing.
+--
+-- `type` is the prop's own name rather than asobi's generic object/resource,
+-- because the client styles props by it (scripts/prop.gd) and anything it does
+-- not recognise is drawn as a grey cube.
+--
+-- No respawn rule on the ore: props are despawned when the last player walks
+-- out of view, and a respawn rule would have the server rebuild them in a zone
+-- nobody can see, keeping the zone process alive with it.
 function spawn_templates(config)
     return {
         cube = {
-            type       = "object",
+            type       = "cube",
             base_state = { solid = true },
         },
         ore = {
-            type       = "resource",
+            type       = "ore",
             base_state = { quantity = 5 },
-            respawn    = { delay = 3000, max_respawns = 2 },
         },
         chest = {
-            type       = "object",
+            type       = "chest",
             base_state = { loot = "common" },
         },
     }
@@ -120,41 +127,52 @@ local function zone_key(cx, cy)
     return string.format("%d,%d", cx, cy)
 end
 
+-- Which zone an entity stands in. Server-created entities carry only what
+-- their template gave them, so cx/cy is derived from the position unless the
+-- entity states it; reading e.cx blindly is how zone_tick used to die with
+-- "bad argument '%d,%d',nil,nil to 'format'" as soon as one appeared.
+local function entity_zone(e)
+    local cx = e.cx or math.floor((e.x or 0) / zone_size)
+    local cy = e.cy or math.floor((e.y or 0) / zone_size)
+    return zone_key(cx, cy)
+end
+
 -- The props of a zone are a pure function of its coordinates, so every player
 -- in the zone gets the same layout and re-entering a dropped zone reproduces it
--- exactly. cx/cy ride on each entity so unloading needs no id parsing.
-local function populate_zone(entities, cx, cy)
+-- exactly.
+--
+-- The ids are not: game.zone.spawn mints its own, so a re-entered zone gets the
+-- same props in the same places under new ids. That is why nothing keys off an
+-- id, and why seeding is guarded by zone_state rather than by writing to a
+-- known key -- spawning is a cast, and the entity is not in the map yet when
+-- the next sweep runs.
+--
+-- cx/cy are passed as overrides so props keep announcing their zone to the
+-- client, which culls on it (scripts/net_world.gd). That is the 4-argument
+-- form, also unusable before asobi#246: its overrides guard was is_map, and
+-- Luerl hands Erlang a proplist.
+local function populate_zone(cx, cy)
     local ox = cx * zone_size
     local oy = cy * zone_size
+    local zone = { cx = cx, cy = cy }
 
     local cubes = 3 + scatter(cx, cy, 1) % 4   -- 3..6 per zone
     for i = 1, cubes do
-        entities[string.format("cube:%d,%d,%d", cx, cy, i)] = {
-            type = "cube",
-            cx = cx,
-            cy = cy,
-            x = ox + scatter(cx, cy, 100 + i) % zone_size,
-            y = oy + scatter(cx, cy, 200 + i) % zone_size,
-        }
+        game.zone.spawn("cube",
+            ox + scatter(cx, cy, 100 + i) % zone_size,
+            oy + scatter(cx, cy, 200 + i) % zone_size,
+            zone)
     end
 
-    entities[string.format("ore:%d,%d", cx, cy)] = {
-        type = "ore",
-        cx = cx,
-        cy = cy,
-        x = ox + scatter(cx, cy, 7) % zone_size,
-        y = oy + scatter(cx, cy, 8) % zone_size,
-        quantity = 5,
-    }
+    game.zone.spawn("ore",
+        ox + scatter(cx, cy, 7) % zone_size,
+        oy + scatter(cx, cy, 8) % zone_size,
+        zone)
 
-    entities[string.format("chest:%d,%d", cx, cy)] = {
-        type = "chest",
-        cx = cx,
-        cy = cy,
-        x = ox + scatter(cx, cy, 11) % zone_size,
-        y = oy + scatter(cx, cy, 12) % zone_size,
-        loot = "common",
-    }
+    game.zone.spawn("chest",
+        ox + scatter(cx, cy, 11) % zone_size,
+        oy + scatter(cx, cy, 12) % zone_size,
+        zone)
 end
 
 function handle_input(player_id, input, entities)
@@ -243,13 +261,12 @@ function zone_tick(entities, zone_state)
     end
 
     -- 3. Which zones already hold props, and which props nobody can see.
-    -- Derived from the entity map rather than kept in zone_state: the layout is
-    -- deterministic, so there is nothing worth persisting.
+    local seeded = zone_state.seeded or {}
     local filled = {}
     local orphaned = {}
     for id, e in pairs(entities) do
         if e.type ~= "player" then
-            local key = zone_key(e.cx, e.cy)
+            local key = entity_zone(e)
             if wanted[key] then
                 filled[key] = true
             else
@@ -257,30 +274,55 @@ function zone_tick(entities, zone_state)
             end
         end
     end
+    -- Despawn rather than just dropping the key: the zone's spawner keeps its
+    -- own record of what it created, and clearing the map behind its back
+    -- leaves it counting entities that no longer exist. The map is cleared too,
+    -- because the one this callback returns is what the zone stores.
     for i = 1, #orphaned do
+        game.zone.despawn(orphaned[i])
         entities[orphaned[i]] = nil
+    end
+
+    -- A zone whose props were just despawned has to be seedable again the next
+    -- time somebody walks into it.
+    local forgotten = {}
+    for key in pairs(seeded) do
+        if not wanted[key] then
+            forgotten[#forgotten + 1] = key
+        end
+    end
+    for i = 1, #forgotten do
+        seeded[forgotten[i]] = nil
     end
 
     -- 4. Fill in zones that came into view, a few per tick. Seeding a whole
     -- 3x3 ring at once is a big enough burst to blow the callback's heap when a
     -- player spawns; spread over ticks the ring is complete in a fraction of a
     -- second and nothing spikes.
+    --
+    -- Both guards are needed: `seeded` covers the spawns still in flight, which
+    -- are not in the entity map yet and would otherwise be spawned again on
+    -- every sweep until they land; `filled` covers a zone process that was
+    -- reaped and rebuilt, which comes back with its entities but without the
+    -- zone state that remembers them.
     local budget = ZONES_PER_TICK
     for key in pairs(wanted) do
         if budget <= 0 then
             break
         end
-        if not filled[key] then
+        if not filled[key] and not seeded[key] then
             local comma = string.find(key, ",")
             local cx = tonumber(string.sub(key, 1, comma - 1))
             local cy = tonumber(string.sub(key, comma + 1))
-            populate_zone(entities, cx, cy)
+            populate_zone(cx, cy)
+            seeded[key] = true
             budget = budget - 1
         end
     end
 
     zone_state.last_seq = last
     zone_state.idle = idle
+    zone_state.seeded = seeded
     return entities, zone_state
 end
 

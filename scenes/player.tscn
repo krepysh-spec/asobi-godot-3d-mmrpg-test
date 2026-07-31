@@ -1,6 +1,7 @@
 [gd_scene format=3 uid="uid://bqp3n8vxk4rla"]
 
 [ext_resource type="Script" uid="uid://f7gu18emf5mh" path="res://scripts/player.gd" id="1_player"]
+[ext_resource type="Script" uid="uid://d383hwo510aaj" path="res://scripts/camera_zoom.gd" id="2_camerazoom"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_player"]
 
@@ -32,3 +33,4 @@ outline_size = 16
 [node name="Camera3D" type="Camera3D" parent="." unique_id=273729039]
 transform = Transform3D(1, 0, 0, 0, 0.866025, 0.5, 0, -0.5, 0.866025, 0, 6, 10)
 far = 2000.0
+script = ExtResource("2_camerazoom")

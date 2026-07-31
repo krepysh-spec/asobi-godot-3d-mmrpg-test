@@ -1,6 +1,8 @@
 extends CharacterBody3D
 
-@export var speed := 6.0
+## Units per second. A zone is 16 units, so this is roughly one zone crossed
+## every 1.3 seconds.
+@export var speed := 12.0
 @export var jump_velocity := 5.0
 @export var player_name := "Player":
 	set(value):

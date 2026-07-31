@@ -26,7 +26,7 @@ services:
 	  ASOBI_DB_USER: postgres
 	  ASOBI_DB_PASSWORD: postgres
 	  ASOBI_CORS_ORIGINS: "*"
-	  # Guest auth needs guest_auth = true in lua/world.lua AND a pepper of at
+	  # Guest auth needs guest_auth = true in lua/config.lua AND a pepper of at
 	  # least 32 bytes here, or it fails closed. Local dev value only.
 	  ASOBI_GUEST_VERIFIER_PEPPER: "dev-only-guest-pepper-change-me-0123456789abcdef0123456789abcdef"
 	volumes:

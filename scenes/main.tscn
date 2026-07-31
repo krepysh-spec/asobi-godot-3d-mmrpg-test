@@ -1,30 +1,27 @@
-[gd_scene load_steps=5 format=3 uid="uid://csy3ws75mbwyc"]
+[gd_scene format=3 uid="uid://csy3ws75mbwyc"]
 
 [ext_resource type="PackedScene" uid="uid://bqp3n8vxk4rla" path="res://scenes/player.tscn" id="1_playerscene"]
 [ext_resource type="Script" uid="uid://clxkte648n46d" path="res://scripts/floor_grid.gd" id="2_floorgrid"]
-[ext_resource type="Script" path="res://scripts/net_world.gd" id="3_networld"]
+[ext_resource type="Script" uid="uid://bp6ia56uauf4n" path="res://scripts/net_world.gd" id="3_networld"]
 [ext_resource type="PackedScene" uid="uid://b7xn4kqw2ptl3" path="res://scenes/debug_hud.tscn" id="4_debughud"]
 
-[node name="Main" type="Node3D"]
+[node name="Main" type="Node3D" unique_id=1685754100]
 
-[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1842816010]
 transform = Transform3D(0.866025, -0.353553, 0.353553, 0, 0.707107, 0.707107, -0.5, -0.612372, 0.612372, 0, 8, 0)
 shadow_enabled = true
 
-[node name="Floor" type="Node3D" parent="."]
+[node name="Floor" type="Node3D" parent="." unique_id=154428909]
 script = ExtResource("2_floorgrid")
-zone_size = 16.0
-grid_size = 2000
-view_tiles = 8
 target_path = NodePath("../Player")
 
-[node name="Player" parent="." instance=ExtResource("1_playerscene")]
+[node name="Player" parent="." unique_id=2079161602 instance=ExtResource("1_playerscene")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 16000, 0.75, 16000)
 
-[node name="NetWorld" type="Node3D" parent="."]
+[node name="NetWorld" type="Node3D" parent="." unique_id=812607936]
 script = ExtResource("3_networld")
 player_path = NodePath("../Player")
 
-[node name="DebugHud" parent="." instance=ExtResource("4_debughud")]
+[node name="DebugHud" parent="." unique_id=1834803052 instance=ExtResource("4_debughud")]
 net_path = NodePath("../NetWorld")
 floor_path = NodePath("../Floor")
