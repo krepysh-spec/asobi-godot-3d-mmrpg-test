@@ -1,7 +1,9 @@
-[gd_scene load_steps=3 format=3 uid="uid://csy3ws75mbwyc"]
+[gd_scene load_steps=5 format=3 uid="uid://csy3ws75mbwyc"]
 
 [ext_resource type="PackedScene" uid="uid://bqp3n8vxk4rla" path="res://scenes/player.tscn" id="1_playerscene"]
 [ext_resource type="Script" uid="uid://clxkte648n46d" path="res://scripts/floor_grid.gd" id="2_floorgrid"]
+[ext_resource type="Script" path="res://scripts/net_world.gd" id="3_networld"]
+[ext_resource type="PackedScene" uid="uid://b7xn4kqw2ptl3" path="res://scenes/debug_hud.tscn" id="4_debughud"]
 
 [node name="Main" type="Node3D"]
 
@@ -11,8 +13,18 @@ shadow_enabled = true
 
 [node name="Floor" type="Node3D" parent="."]
 script = ExtResource("2_floorgrid")
-map_size = 1000.0
-section_size = 50.0
+zone_size = 16.0
+grid_size = 2000
+view_tiles = 8
+target_path = NodePath("../Player")
 
 [node name="Player" parent="." instance=ExtResource("1_playerscene")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 16000, 0.75, 16000)
+
+[node name="NetWorld" type="Node3D" parent="."]
+script = ExtResource("3_networld")
+player_path = NodePath("../Player")
+
+[node name="DebugHud" parent="." instance=ExtResource("4_debughud")]
+net_path = NodePath("../NetWorld")
+floor_path = NodePath("../Floor")
