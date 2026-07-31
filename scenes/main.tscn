@@ -1,0 +1,18 @@
+[gd_scene load_steps=3 format=3 uid="uid://csy3ws75mbwyc"]
+
+[ext_resource type="PackedScene" uid="uid://bqp3n8vxk4rla" path="res://scenes/player.tscn" id="1_playerscene"]
+[ext_resource type="Script" uid="uid://clxkte648n46d" path="res://scripts/floor_grid.gd" id="2_floorgrid"]
+
+[node name="Main" type="Node3D"]
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.866025, -0.353553, 0.353553, 0, 0.707107, 0.707107, -0.5, -0.612372, 0.612372, 0, 8, 0)
+shadow_enabled = true
+
+[node name="Floor" type="Node3D" parent="."]
+script = ExtResource("2_floorgrid")
+map_size = 1000.0
+section_size = 50.0
+
+[node name="Player" parent="." instance=ExtResource("1_playerscene")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 0)

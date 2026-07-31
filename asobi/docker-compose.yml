@@ -1,0 +1,33 @@
+name: asobi-test
+services:
+  postgres:
+	image: postgres:17
+	environment:
+	  POSTGRES_USER: postgres
+	  POSTGRES_PASSWORD: postgres
+	  POSTGRES_DB: spawns
+	healthcheck:
+	  test: ["CMD-SHELL", "pg_isready -U postgres"]
+	  interval: 5s
+	  timeout: 5s
+	  retries: 5
+
+  asobi:
+	image: ghcr.io/widgrensit/asobi_lua:latest
+	depends_on:
+	  postgres:
+		condition: service_healthy
+	ports:
+	  - "8080:8080"
+	environment:
+	  ASOBI_PORT: "8080"
+	  ASOBI_DB_HOST: postgres
+	  ASOBI_DB_NAME: spawns
+	  ASOBI_DB_USER: postgres
+	  ASOBI_DB_PASSWORD: postgres
+	  ASOBI_CORS_ORIGINS: "*"
+	  # Guest auth needs guest_auth = true in lua/world.lua AND a pepper of at
+	  # least 32 bytes here, or it fails closed. Local dev value only.
+	  ASOBI_GUEST_VERIFIER_PEPPER: "dev-only-guest-pepper-change-me-0123456789abcdef0123456789abcdef"
+	volumes:
+	  - ./lua:/app/game

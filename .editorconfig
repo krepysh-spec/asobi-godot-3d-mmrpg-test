@@ -1,0 +1,16 @@
+root = true
+
+[*]
+charset = utf-8
+
+# YAML forbids tabs outright - docker compose refuses to parse the file.
+[*.{yml,yaml}]
+indent_style = space
+indent_size = 2
+
+[*.lua]
+indent_style = space
+indent_size = 4
+
+[*.gd]
+indent_style = tab
