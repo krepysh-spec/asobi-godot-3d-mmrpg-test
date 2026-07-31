@@ -6,3 +6,19 @@
 script = ExtResource("1_prop")
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="."]
+
+[node name="Body" type="StaticBody3D" parent="."]
+collision_layer = 2
+collision_mask = 0
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Body"]
+
+[node name="HealthLabel" type="Label3D" parent="."]
+pixel_size = 0.001
+billboard = 1
+no_depth_test = true
+fixed_size = true
+text = ""
+font_size = 48
+outline_size = 12
+modulate = Color(0.95, 0.85, 0.55, 1)

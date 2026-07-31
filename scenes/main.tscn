@@ -4,6 +4,7 @@
 [ext_resource type="Script" uid="uid://clxkte648n46d" path="res://scripts/floor_grid.gd" id="2_floorgrid"]
 [ext_resource type="Script" uid="uid://bp6ia56uauf4n" path="res://scripts/net_world.gd" id="3_networld"]
 [ext_resource type="PackedScene" uid="uid://b7xn4kqw2ptl3" path="res://scenes/debug_hud.tscn" id="4_debughud"]
+[ext_resource type="PackedScene" path="res://scenes/gold_hud.tscn" id="5_goldhud"]
 
 [node name="Main" type="Node3D" unique_id=1685754100]
 
@@ -25,3 +26,6 @@ player_path = NodePath("../Player")
 [node name="DebugHud" parent="." unique_id=1834803052 instance=ExtResource("4_debughud")]
 net_path = NodePath("../NetWorld")
 floor_path = NodePath("../Floor")
+
+[node name="GoldHud" parent="." instance=ExtResource("5_goldhud")]
+net_path = NodePath("../NetWorld")

@@ -23,6 +23,13 @@ const WORLD_SIZE := GRID_SIZE * ZONE_SIZE
 const SEND_HZ := 15.0
 const GROUND_Y := 0.75  # floor top (0.25) + half the 1x1x1 cube
 
+# Must match SHOT_RANGE in asobi/lua/world.lua, which is the one that counts.
+const SHOT_RANGE := 30.0
+const SHOT_COOLDOWN := 0.25
+# Must match PROP_LAYER in scripts/prop.gd.
+const PROP_LAYER := 2
+const TRACER_SECONDS := 0.06
+
 # Must match view_radius in asobi/lua/world.lua.
 const VIEW_RADIUS := 1
 
@@ -52,6 +59,8 @@ var _joined := false
 var _spawned := false
 var _tick := 0
 var _ticks_seen := 0
+var _shot_cooldown := 0.0
+var _tracer_material: StandardMaterial3D
 
 func _ready() -> void:
 	_player = get_node(player_path)
@@ -78,6 +87,10 @@ func _process(delta: float) -> void:
 
 	_player.position.x = clampf(_player.position.x, 0.0, WORLD_SIZE)
 	_player.position.z = clampf(_player.position.z, 0.0, WORLD_SIZE)
+
+	_shot_cooldown = maxf(_shot_cooldown - delta, 0.0)
+	if Input.is_action_pressed("shoot") and _shot_cooldown <= 0.0:
+		_shoot()
 
 	# Reported unconditionally, including while standing still: the server reaps
 	# players whose seq stops advancing, so silence reads as a disconnect.
@@ -168,6 +181,9 @@ func _on_world_tick(payload: Dictionary) -> void:
 func _apply(id: String, update: Dictionary) -> void:
 	# "u" carries changed fields only, so state is merged rather than replaced.
 	var state: Dictionary = _states.get(id, {})
+	# Read before the merge: a shot is announced by shot_n going up, and after
+	# merging there is nothing left to compare against.
+	var seen_shots := int(state.get("shot_n", 0))
 	for key in update:
 		if key != "op" and key != "id":
 			state[key] = update[key]
@@ -198,19 +214,36 @@ func _apply(id: String, update: Dictionary) -> void:
 
 	node.set_display_name(str(state.get("name", "player")))
 
-# Props never move, so they are placed once and only removed.
-func _apply_prop(id: String, kind: String, state: Dictionary) -> void:
-	if _props.has(id):
-		return
+	# Somebody else fired. The shot rides on their entity rather than arriving as
+	# its own message, so this is the only place it can be noticed.
+	var shots := int(state.get("shot_n", 0))
+	if shots > seen_shots and _in_view(zone_of(_player.position), _zone_from_state(id, node.position)):
+		_tracer(node.position, Vector3(
+			float(state.get("shot_x", 0.0)), node.position.y, float(state.get("shot_y", 0.0)),
+		))
 
-	var node: Node3D = PROP.instantiate()
-	add_child(node)
-	node.apply_type(kind)
-	var ground := node.position.y
-	node.position = Vector3(
-		float(state.get("x", 0.0)), ground, float(state.get("y", 0.0)),
-	)
-	_props[id] = node
+# Props never move, so position is set once. Health does change: a shot arrives
+# as a partial update, and the node is re-read rather than rebuilt.
+func _apply_prop(id: String, kind: String, state: Dictionary) -> void:
+	var node: Node3D = _props.get(id)
+
+	if node == null:
+		node = PROP.instantiate()
+		add_child(node)
+		node.apply_type(kind)
+		# The ray finds the body; the body has to be able to name the entity the
+		# server knows it as.
+		node.set_meta("entity_id", id)
+		var ground := node.position.y
+		node.position = Vector3(
+			float(state.get("x", 0.0)), ground, float(state.get("y", 0.0)),
+		)
+		_props[id] = node
+
+	if state.has("hp"):
+		node.set_health(float(state["hp"]), float(state.get("hp_max", state["hp"])))
+	elif state.has("amount"):
+		node.set_amount(int(state["amount"]))
 
 func _remove(id: String) -> void:
 	_states.erase(id)
@@ -235,6 +268,81 @@ func _adopt_spawn(state: Dictionary) -> void:
 	_spawned = true
 	_player.position = _to_godot(state)
 
+# The player never turns -- movement is on world axes and rotation.y stays 0 --
+# so shots are aimed with the mouse rather than with the body. The ray looks at
+# the prop layer only, which keeps the ground from swallowing a shot.
+#
+# The client picks the target and the server decides whether the shot counts, so
+# a hit here is a request, not a result: the prop shrinks or vanishes when the
+# next tick says so, never because this function fired.
+func _shoot() -> void:
+	var camera := get_viewport().get_camera_3d()
+	if camera == null:
+		return
+
+	var mouse := get_viewport().get_mouse_position()
+	var from := camera.project_ray_origin(mouse)
+	var direction := camera.project_ray_normal(mouse)
+
+	var target_id := ""
+	var point := Vector3.ZERO
+
+	var query := PhysicsRayQueryParameters3D.create(from, from + direction * 500.0, PROP_LAYER)
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+
+	if hit.is_empty():
+		# A miss still has to land somewhere, or there is no shot for anyone to
+		# see. Fire at the ground under the cursor.
+		var ground: Variant = Plane(Vector3.UP, _player.position.y).intersects_ray(from, direction)
+		if ground == null:
+			return
+		point = ground
+	else:
+		point = hit["position"]
+		target_id = str(hit["collider"].get_parent().get_meta("entity_id", ""))
+
+	# Out of range the shot still happens, it just falls short -- and hits
+	# nothing. The server clamps the same way; this is only so the local tracer
+	# matches what everyone else will be shown.
+	var offset := point - _player.position
+	if offset.length() > SHOT_RANGE:
+		point = _player.position + offset.normalized() * SHOT_RANGE
+		target_id = ""
+
+	_shot_cooldown = SHOT_COOLDOWN
+	_tracer(_player.position, point)
+
+	var payload := {"kind": "shoot", "x": point.x, "y": point.z}
+	if target_id != "":
+		payload["target"] = target_id
+	Asobi.realtime.world_input(payload)
+
+func _tracer(from: Vector3, to: Vector3) -> void:
+	var length := from.distance_to(to)
+	if length < 0.05:
+		return
+
+	if _tracer_material == null:
+		_tracer_material = StandardMaterial3D.new()
+		_tracer_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_tracer_material.albedo_color = Color(1.0, 0.85, 0.4)
+
+	var beam := BoxMesh.new()
+	beam.size = Vector3(0.05, 0.05, length)
+
+	var node := MeshInstance3D.new()
+	node.mesh = beam
+	node.material_override = _tracer_material
+	add_child(node)
+	node.global_position = (from + to) * 0.5
+
+	# look_at cannot use an up vector parallel to the aim, which happens when
+	# shooting something directly below.
+	var aim := (to - from).normalized()
+	node.look_at(to, Vector3.RIGHT if absf(aim.dot(Vector3.UP)) > 0.99 else Vector3.UP)
+
+	get_tree().create_timer(TRACER_SECONDS).timeout.connect(node.queue_free)
+
 func _send_move() -> void:
 	_seq += 1
 	Asobi.realtime.world_input({
@@ -250,6 +358,11 @@ func _send_move() -> void:
 ## cx = floor(x / zone_size) so the numbers shown match the server's.
 func zone_of(point: Vector3) -> Vector2i:
 	return Vector2i(floori(point.x / ZONE_SIZE), floori(point.z / ZONE_SIZE))
+
+## Gold picked up so far, as the server counts it. It rides on our own player
+## entity, so it survives nothing: a reconnect is a new entity and a fresh purse.
+func gold() -> int:
+	return int(_states.get(_my_id, {}).get("gold", 0))
 
 ## Snapshot for the debug overlay.
 func debug_info() -> Dictionary:

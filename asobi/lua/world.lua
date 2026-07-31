@@ -49,6 +49,24 @@ local ZONES_PER_TICK = 2             -- zones seeded per sweep, to avoid bursts
 -- zone processes until the node runs out of memory.
 local PROP_RADIUS = 0
 
+-- Shooting. The client picks the target and the server owns the consequences:
+-- it decides whether the shot was close enough to count, how much it takes off
+-- and when the prop is gone. Aim is not checked, the same way positions are not
+-- checked -- a client that lies about what it hit is only limited by the range
+-- below. Rate limiting is the client's cooldown; handle_input has no per-player
+-- state to enforce one here.
+local SHOT_RANGE  = 30
+local SHOT_DAMAGE = 1
+
+-- What a prop is worth when it breaks, before a small random bonus.
+local GOLD_BY_TYPE = { cube = 2, ore = 5, chest = 10 }
+
+-- Picked up by walking over it, decided in the sweep rather than by the client.
+-- Wide enough that it cannot be stepped over: a player covers about 2.4 units
+-- between sweeps at the current speed, so a radius under that would let gold
+-- slip between two checks.
+local PICKUP_RADIUS = 2.5
+
 -- The registry populate_zone spawns from. Reaching the zone's spawner at all
 -- needs asobi > 0.46: before the fix for widgrensit/asobi#246 the templates
 -- were looked up in the world config instead of its game state, so the spawner
@@ -65,15 +83,21 @@ function spawn_templates(config)
     return {
         cube = {
             type       = "cube",
-            base_state = { solid = true },
+            base_state = { solid = true, hp = 3, hp_max = 3 },
         },
         ore = {
             type       = "ore",
-            base_state = { quantity = 5 },
+            base_state = { quantity = 5, hp = 5, hp_max = 5 },
         },
         chest = {
             type       = "chest",
-            base_state = { loot = "common" },
+            base_state = { loot = "common", hp = 2, hp_max = 2 },
+        },
+        -- No hp: gold is picked up, not shot. shoot() refuses anything without
+        -- hp, so a stray click cannot delete a pile.
+        gold = {
+            type       = "gold",
+            base_state = { amount = 1 },
         },
     }
 end
@@ -175,8 +199,86 @@ local function populate_zone(cx, cy)
         zone)
 end
 
+-- One shot at one prop. The client says what it hit; the server checks the shot
+-- was taken from close enough, takes the damage off and despawns the prop when
+-- it runs out. Both the new hp and the removal reach every subscriber through
+-- the ordinary tick delta, so no separate message is needed.
+--
+-- A prop destroyed here stays destroyed only while its zone is loaded: the
+-- layout is recomputed from (cx, cy) rather than stored, so walking far enough
+-- away for the zone to be dropped and coming back rebuilds it intact.
+local function shoot(player_id, input, entities)
+    local shooter = entities[player_id]
+    if shooter == nil then
+        return
+    end
+
+    -- Where the shot ended up, kept on the shooter's own entity so it reaches
+    -- every subscriber through the ordinary delta -- no second message type,
+    -- and a client that was not looking when it happened simply never sees a
+    -- stale one. shot_n is what tells a client this is a new shot rather than
+    -- the same one being re-sent; a miss carries no target and still draws.
+    local sx = clamp(tonumber(input.x) or shooter.x or 0, 0, WORLD_SIZE)
+    local sy = clamp(tonumber(input.y) or shooter.y or 0, 0, WORLD_SIZE)
+    local ox, oy = shooter.x or 0, shooter.y or 0
+    local reach = math.sqrt((sx - ox) * (sx - ox) + (sy - oy) * (sy - oy))
+    if reach > SHOT_RANGE then
+        -- Stop the drawn shot at the range the server is willing to honour,
+        -- rather than letting a client paint a line across the map.
+        sx = ox + (sx - ox) / reach * SHOT_RANGE
+        sy = oy + (sy - oy) / reach * SHOT_RANGE
+    end
+
+    shooter.shot_n = (shooter.shot_n or 0) + 1
+    shooter.shot_x = sx
+    shooter.shot_y = sy
+
+    local target_id = input.target
+    if type(target_id) ~= "string" then
+        return
+    end
+
+    local target = entities[target_id]
+    -- Only things with health can be shot. That is what keeps dropped gold and
+    -- anything else the world puts down from being deleted by a stray click.
+    if target == nil or target.type == "player" or target.hp == nil then
+        return
+    end
+
+    local dx = (target.x or 0) - ox
+    local dy = (target.y or 0) - oy
+    if dx * dx + dy * dy > SHOT_RANGE * SHOT_RANGE then
+        return
+    end
+
+    local hp = (target.hp or 1) - SHOT_DAMAGE
+    if hp > 0 then
+        target.hp = hp
+        return
+    end
+
+    -- Broken: leave the gold where it stood. It is a plain zone entity, so it
+    -- streams and unloads with everything else in that zone.
+    game.zone.spawn("gold", target.x, target.y, {
+        amount = (GOLD_BY_TYPE[target.type] or 1) + math.random(0, 2),
+        cx = target.cx,
+        cy = target.cy,
+    })
+    game.zone.despawn(target_id)
+    entities[target_id] = nil
+end
+
 function handle_input(player_id, input, entities)
-    if not input or input.kind ~= "move" then
+    if not input then
+        return entities
+    end
+
+    if input.kind == "shoot" then
+        shoot(player_id, input, entities)
+        return entities
+    end
+
+    if input.kind ~= "move" then
         return entities
     end
 
@@ -215,6 +317,16 @@ function zone_tick(entities, zone_state)
     end
     zone_state.since_sweep = 0
 
+    -- Luerl does not collect anything on its own, and the bridge hands this
+    -- callback a freshly encoded copy of the entity map every single time it is
+    -- called -- 20 times a second here, plus once per player input at 15 Hz.
+    -- Those copies stay in the zone's Lua state forever. Left alone the state
+    -- grows without bound, and because every callback runs in a spawned process
+    -- that copies the state, the cost of each call grows with it: one player
+    -- takes the node from 150 MB and 1% CPU to 4.8 GB and 100% in three
+    -- minutes, ending in heap_exhausted.
+    collectgarbage("collect")
+
     local last = zone_state.last_seq or {}
     local idle = zone_state.idle or {}
 
@@ -244,8 +356,10 @@ function zone_tick(entities, zone_state)
 
     -- 2. Every zone within view_radius of a live player.
     local wanted = {}
+    local players = {}
     for _, e in pairs(entities) do
         if e.type == "player" then
+            players[#players + 1] = e
             local cx = math.floor(e.x / zone_size)
             local cy = math.floor(e.y / zone_size)
             for dx = -PROP_RADIUS, PROP_RADIUS do
@@ -257,6 +371,34 @@ function zone_tick(entities, zone_state)
                     end
                 end
             end
+        end
+    end
+
+    -- 2b. Gold anyone is standing on. Decided here rather than on a client
+    -- request: the server already knows where everybody is, and a pickup a
+    -- client could ask for is a pickup a client could ask for twice. The
+    -- running total lives on the player's own entity, so it reaches the owner
+    -- through the same delta as everything else.
+    local collected = nil
+    for id, e in pairs(entities) do
+        if e.type == "gold" then
+            for i = 1, #players do
+                local p = players[i]
+                local dx = (e.x or 0) - (p.x or 0)
+                local dy = (e.y or 0) - (p.y or 0)
+                if dx * dx + dy * dy <= PICKUP_RADIUS * PICKUP_RADIUS then
+                    p.gold = (p.gold or 0) + (e.amount or 1)
+                    collected = collected or {}
+                    collected[#collected + 1] = id
+                    break
+                end
+            end
+        end
+    end
+    if collected ~= nil then
+        for i = 1, #collected do
+            game.zone.despawn(collected[i])
+            entities[collected[i]] = nil
         end
     end
 

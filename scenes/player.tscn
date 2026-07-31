@@ -10,6 +10,12 @@ albedo_color = Color(0.9, 0.35, 0.2, 1)
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_player"]
 
+[sub_resource type="BoxMesh" id="BoxMesh_muzzle"]
+size = Vector3(0.16, 0.16, 0.5)
+
+[sub_resource type="StandardMaterial3D" id="Mat_muzzle"]
+albedo_color = Color(0.16, 0.16, 0.18, 1)
+
 [node name="Player" type="CharacterBody3D" unique_id=858925475]
 script = ExtResource("1_player")
 
@@ -19,6 +25,11 @@ surface_material_override/0 = SubResource("Mat_player")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=1169418182]
 shape = SubResource("BoxShape3D_player")
+
+[node name="Muzzle" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.1, -0.6)
+mesh = SubResource("BoxMesh_muzzle")
+surface_material_override/0 = SubResource("Mat_muzzle")
 
 [node name="NameLabel" type="Label3D" parent="." unique_id=2023264876]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.2, 0)
